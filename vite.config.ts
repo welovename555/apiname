@@ -38,8 +38,7 @@ function heroSmsMiddleware() {
 }
 
 export default defineConfig(({ mode }) => ({
-    // GitHub Pages serves from /apiname/ subdirectory
-    base: mode === 'production' ? '/apiname/' : '/',
+    base: '/',
     server: {
         host: "::",
         port: 8080,
