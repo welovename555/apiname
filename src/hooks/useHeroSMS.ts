@@ -346,6 +346,21 @@ export function useHeroSMS() {
         }
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Auto-delete history older than 24 hours
+    useEffect(() => {
+        const ONE_DAY = 24 * 60 * 60 * 1000;
+        const cleanup = () => {
+            const now = Date.now();
+            const filtered = history.filter(item => now - item.timestamp < ONE_DAY);
+            if (filtered.length !== history.length) {
+                saveHistory(filtered);
+            }
+        };
+        cleanup(); // Run on mount
+        const interval = setInterval(cleanup, 60 * 60 * 1000); // Check every hour
+        return () => clearInterval(interval);
+    }, [history.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Poll for OTP when active order exists
     useEffect(() => {
         if (!activeOrder || activeOrder.status !== 'waiting') {
