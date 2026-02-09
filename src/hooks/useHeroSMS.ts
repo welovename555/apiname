@@ -1,11 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from '@/hooks/use-toast';
 
-// In production (GitHub Pages), API calls go to the VPS proxy
-// In development, they use the local Vite middleware
-const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const API_BASE = isLocalDev ? '' : 'http://203.154.83.192';
-const API_PATH = `${API_BASE}/api/hero-sms`;
+const API_PATH = '/api/hero-sms';
 
 const STORAGE_KEY_APIKEY = 'hero-sms-api-key';
 const STORAGE_KEY_HISTORY = 'hero-sms-history';
