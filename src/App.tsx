@@ -9,14 +9,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Separator } from '@/components/ui/separator';
 import { useHeroSMS, HeroHistoryItem } from '@/hooks/useHeroSMS';
+import { useShopvia, ShopviaProduct, formatVndPrice } from '@/hooks/useShopvia';
 import {
     Smartphone, Wifi, WifiOff, DollarSign, Copy, Check, X, Clock, Loader2, Phone,
-    ShieldCheck, Trash2, RefreshCw, Key, AlertCircle, CheckCircle2, XCircle, Timer
+    ShieldCheck, Trash2, RefreshCw, Key, AlertCircle, CheckCircle2, XCircle, Timer,
+    Mail, Star, ShoppingCart, Package, ChevronDown, ChevronUp, Eye, EyeOff
 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
-import { Toaster } from '@/components/ui/toaster';
 
-// ===== API Key Bar =====
+
+// ===== API Key Bar (Hero-SMS) =====
 function ApiKeyBar({
     apiKey, onConnect, onDisconnect, connected, balance, loading
 }: {
@@ -579,9 +581,444 @@ function HistoryTab({
     );
 }
 
+// ===== SHOPVIA: Product Card =====
+function ProductCard({
+    product, isFav, onToggleFav, onBuy, buying
+}: {
+    product: ShopviaProduct;
+    isFav: boolean;
+    onToggleFav: () => void;
+    onBuy: (qty: number) => void;
+    buying: boolean;
+}) {
+    const [qty, setQty] = useState(Number(product.min) || 1);
+    const [showPass, setShowPass] = useState(false);
+
+    return (
+        <div className="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
+            {/* Star */}
+            <button
+                onClick={(e) => { e.stopPropagation(); onToggleFav(); }}
+                className="shrink-0 p-1 rounded-lg hover:bg-yellow-50 transition-colors"
+            >
+                <Star className={`h-4 w-4 ${isFav ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+            </button>
+
+            {/* Info */}
+            <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{product.name}</p>
+                <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs text-muted-foreground">{formatVndPrice(product.price)}</span>
+                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                        สต็อก: {product.amount}
+                    </Badge>
+                </div>
+            </div>
+
+            {/* Qty + Buy */}
+            <div className="flex items-center gap-2 shrink-0">
+                <Input
+                    type="number"
+                    value={qty}
+                    onChange={(e) => setQty(Math.max(Number(product.min) || 1, Number(e.target.value)))}
+                    className="w-16 h-8 text-center text-sm"
+                    min={Number(product.min) || 1}
+                    max={Number(product.max) || product.amount}
+                />
+                <Button
+                    size="sm"
+                    onClick={() => onBuy(qty)}
+                    disabled={buying || product.amount === 0 || qty < 1}
+                    className="bg-emerald-600 hover:bg-emerald-700 h-8"
+                >
+                    {buying ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShoppingCart className="h-3 w-3" />}
+                </Button>
+            </div>
+        </div>
+    );
+}
+
+// ===== SHOPVIA: Main Section =====
+function ShopviaSection({ shopvia }: { shopvia: ReturnType<typeof useShopvia> }) {
+    const [showAllProducts, setShowAllProducts] = useState(false);
+    const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+    const [buyingProduct, setBuyingProduct] = useState<string | null>(null);
+    const [lastResult, setLastResult] = useState<{ emails: { email: string; password: string }[]; productName: string } | null>(null);
+    const [copied, setCopied] = useState<string | null>(null);
+    const [showPasswords, setShowPasswords] = useState(false);
+    const [shopviaKeyInput, setShopviaKeyInput] = useState(shopvia.apiKey);
+    const [, setTick] = useState(0); // force re-render for countdown
+
+    // Update countdown every minute
+    useEffect(() => {
+        if (shopvia.orders.length === 0) return;
+        const interval = setInterval(() => setTick(t => t + 1), 60 * 1000);
+        return () => clearInterval(interval);
+    }, [shopvia.orders.length]);
+
+    const getCountdown = (timestamp: number) => {
+        const ONE_DAY = 24 * 60 * 60 * 1000;
+        const remaining = ONE_DAY - (Date.now() - timestamp);
+        if (remaining <= 0) return 'หมดเวลา';
+        const h = Math.floor(remaining / (60 * 60 * 1000));
+        const m = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+        return `เหลือ ${h} ชม. ${m} น.`;
+    };
+
+    const handleBuy = async (product: ShopviaProduct, qty: number) => {
+        setBuyingProduct(product.id);
+        const result = await shopvia.buyProduct(product.id, product.name, qty, product.price);
+        if (result.success) {
+            setLastResult({ emails: result.emails, productName: product.name });
+        }
+        setBuyingProduct(null);
+    };
+
+    const copyAll = async () => {
+        if (!lastResult) return;
+        const text = lastResult.emails.map(e => `${e.email}|${e.password}`).join('\n');
+        try {
+            await navigator.clipboard.writeText(text);
+            toast({ title: 'คัดลอกทั้งหมดแล้ว!', description: `${lastResult.emails.length} รายการ` });
+        } catch { }
+    };
+
+    const copyOne = async (text: string, id: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(id);
+            setTimeout(() => setCopied(null), 2000);
+        } catch { }
+    };
+
+    const toggleCat = (catId: string) => {
+        setExpandedCats(prev => {
+            const next = new Set(prev);
+            if (next.has(catId)) next.delete(catId);
+            else next.add(catId);
+            return next;
+        });
+    };
+
+    return (
+        <div className="space-y-4">
+            {/* Shopvia API Key Bar */}
+            <Card>
+                <CardContent className="pt-4 pb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                            <Mail className="h-5 w-5 text-blue-500" />
+                            <span className="font-medium text-sm">Shopvia</span>
+                        </div>
+                        {!shopvia.connected ? (
+                            <>
+                                <Input
+                                    type="password"
+                                    placeholder="Shopvia API Key"
+                                    value={shopviaKeyInput}
+                                    onChange={(e) => setShopviaKeyInput(e.target.value)}
+                                    className="flex-1 h-8 text-sm"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && shopviaKeyInput.trim()) {
+                                            shopvia.connect(shopviaKeyInput.trim());
+                                        }
+                                    }}
+                                />
+                                <Button
+                                    size="sm"
+                                    onClick={() => shopvia.connect(shopviaKeyInput.trim())}
+                                    disabled={!shopviaKeyInput.trim() || shopvia.loading.connect}
+                                    className="bg-blue-600 hover:bg-blue-700 h-8"
+                                >
+                                    {shopvia.loading.connect ? <Loader2 className="h-3 w-3 animate-spin" /> : 'เชื่อมต่อ'}
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/30 gap-1">
+                                    <DollarSign className="h-3 w-3" />
+                                    {shopvia.profile ? formatVndPrice(shopvia.profile.balance) : '...'}
+                                </Badge>
+                                <div className="ml-auto flex items-center gap-1">
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { shopvia.fetchProfile(); shopvia.fetchProducts(); }} disabled={shopvia.loading.profile || shopvia.loading.products}>
+                                        <RefreshCw className={`h-3.5 w-3.5 ${(shopvia.loading.profile || shopvia.loading.products) ? 'animate-spin' : ''}`} />
+                                    </Button>
+                                    <Button variant="ghost" size="sm" onClick={shopvia.disconnect} className="text-destructive h-7 text-xs">
+                                        ตัดการเชื่อมต่อ
+                                    </Button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
+            {/* Profile / Balance */}
+            {shopvia.connected && shopvia.profile && (
+                <Card className="border-blue-500/20 bg-gradient-to-r from-background to-blue-500/5">
+                    <CardContent className="pt-5 pb-5">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="h-10 w-10 rounded-full bg-blue-500/10 flex items-center justify-center">
+                                    <Mail className="h-5 w-5 text-blue-500" />
+                                </div>
+                                <div>
+                                    <div className="text-xs text-muted-foreground">เครดิตคงเหลือ</div>
+                                    <div className="text-lg font-bold text-blue-600">
+                                        {formatVndPrice(shopvia.profile.balance)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-xs text-muted-foreground">ประมาณ</div>
+                                <div className="text-lg font-semibold text-emerald-600">
+                                    {(() => {
+                                        const vnd = Number(shopvia.profile.balance) || 0;
+                                        const thb = vnd / 690;
+                                        return `฿${thb.toFixed(2)}`;
+                                    })()}
+                                </div>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Last Buy Result */}
+            {lastResult && lastResult.emails.length > 0 && (
+                <Card className="border-emerald-500/20 bg-emerald-500/5">
+                    <CardHeader className="pb-2">
+                        <div className="flex items-center justify-between">
+                            <CardTitle className="text-base flex items-center gap-2 text-emerald-600">
+                                <CheckCircle2 className="h-5 w-5" />
+                                ซื้อ {lastResult.productName} สำเร็จ ({lastResult.emails.length} รายการ)
+                            </CardTitle>
+                            <div className="flex gap-1">
+                                <Button variant="outline" size="sm" onClick={() => setShowPasswords(!showPasswords)}>
+                                    {showPasswords ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={copyAll}>
+                                    <Copy className="h-3 w-3 mr-1" /> คัดลอกทั้งหมด
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={() => setLastResult(null)}>
+                                    <X className="h-3 w-3" />
+                                </Button>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                            {lastResult.emails.map((e, i) => (
+                                <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-background/50 text-xs font-mono">
+                                    <span className="flex-1 truncate">{e.email}</span>
+                                    <span className="text-muted-foreground">|</span>
+                                    <span className="text-muted-foreground">{showPasswords ? e.password : '••••••'}</span>
+                                    <Button
+                                        variant="ghost" size="icon" className="h-5 w-5"
+                                        onClick={() => copyOne(`${e.email}|${e.password}`, `email-${i}`)}
+                                    >
+                                        {copied === `email-${i}` ? <Check className="h-2.5 w-2.5 text-emerald-500" /> : <Copy className="h-2.5 w-2.5" />}
+                                    </Button>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Favorites */}
+            <Card>
+                <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                        <CardTitle className="text-base flex items-center gap-2">
+                            <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" />
+                            สินค้าโปรด ({shopvia.pinnedProducts.length})
+                        </CardTitle>
+                        <Button variant="ghost" size="sm" onClick={() => shopvia.fetchProducts()} disabled={shopvia.loading.products}>
+                            <RefreshCw className={`h-4 w-4 ${shopvia.loading.products ? 'animate-spin' : ''}`} />
+                        </Button>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    {shopvia.loading.products && shopvia.pinnedProducts.length === 0 ? (
+                        <div className="flex items-center justify-center p-6">
+                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : shopvia.pinnedProducts.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">ยังไม่มีสินค้าโปรด กดดาว ⭐ เพื่อเพิ่ม</p>
+                    ) : (
+                        <div className="space-y-2">
+                            {shopvia.pinnedProducts.map(p => (
+                                <ProductCard
+                                    key={p.id}
+                                    product={p}
+                                    isFav={true}
+                                    onToggleFav={() => shopvia.toggleFavorite(p.id)}
+                                    onBuy={(qty) => handleBuy(p, qty)}
+                                    buying={buyingProduct === p.id}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* All Products Toggle */}
+            <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => setShowAllProducts(!showAllProducts)}
+            >
+                {showAllProducts ? <ChevronUp className="h-4 w-4 mr-2" /> : <ChevronDown className="h-4 w-4 mr-2" />}
+                {showAllProducts ? 'ซ่อนสินค้าทั้งหมด' : `ดูสินค้าทั้งหมด (${shopvia.allProducts.length})`}
+            </Button>
+
+            {/* All Products by Category */}
+            {showAllProducts && shopvia.categories.map(cat => (
+                <Card key={cat.id}>
+                    <CardHeader className="pb-2 cursor-pointer" onClick={() => toggleCat(cat.id)}>
+                        <div className="flex items-center justify-between">
+                            <CardTitle className="text-sm flex items-center gap-2">
+                                {cat.icon && <img src={cat.icon} alt="" className="h-5 w-5 rounded" />}
+                                {cat.name}
+                                <Badge variant="secondary" className="text-[10px]">{cat.products.length}</Badge>
+                            </CardTitle>
+                            {expandedCats.has(cat.id) ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </div>
+                    </CardHeader>
+                    {expandedCats.has(cat.id) && (
+                        <CardContent>
+                            <div className="space-y-2">
+                                {cat.products.map(p => (
+                                    <ProductCard
+                                        key={p.id}
+                                        product={p}
+                                        isFav={shopvia.isFavorite(p.id)}
+                                        onToggleFav={() => shopvia.toggleFavorite(p.id)}
+                                        onBuy={(qty) => handleBuy(p, qty)}
+                                        buying={buyingProduct === p.id}
+                                    />
+                                ))}
+                            </div>
+                        </CardContent>
+                    )}
+                </Card>
+            ))}
+
+            {/* Order History */}
+            {shopvia.orders.length > 0 && (
+                <Card>
+                    <CardHeader className="pb-2">
+                        <div className="flex items-center justify-between">
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <Package className="h-5 w-5" />
+                                ประวัติซื้อ ({shopvia.orders.length})
+                            </CardTitle>
+                            <Button
+                                variant="outline" size="sm"
+                                onClick={() => shopvia.saveOrders([])}
+                                className="text-destructive hover:text-destructive"
+                            >
+                                <Trash2 className="h-3 w-3 mr-1" /> ล้าง
+                            </Button>
+                        </div>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-2">
+                            {shopvia.orders.map((order, i) => (
+                                <div key={i} className="rounded-lg border bg-muted/30 overflow-hidden">
+                                    <div
+                                        className="p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+                                        onClick={() => {
+                                            const el = document.getElementById(`order-detail-${i}`);
+                                            if (el) el.classList.toggle('hidden');
+                                        }}
+                                    >
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="text-sm font-medium">{order.productName}</span>
+                                            <div className="flex flex-col items-end gap-0.5">
+                                                <span className="text-xs text-muted-foreground">
+                                                    {new Date(order.timestamp).toLocaleString('th-TH', {
+                                                        month: 'short', day: 'numeric',
+                                                        hour: '2-digit', minute: '2-digit'
+                                                    })}
+                                                </span>
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 font-medium">
+                                                    ⏳ {getCountdown(order.timestamp)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                            <span>จำนวน: {order.qty}</span>
+                                            <span>•</span>
+                                            <span className={order.emails.length > 0 ? 'text-emerald-600 font-medium' : ''}>
+                                                ได้รับ: {order.emails.length} รายการ
+                                            </span>
+                                            <span>•</span>
+                                            <span>{formatVndPrice(order.totalCost)}</span>
+                                            <ChevronDown className="h-3 w-3 ml-auto" />
+                                        </div>
+                                    </div>
+                                    <div id={`order-detail-${i}`} className="hidden border-t px-3 pb-3 pt-2">
+                                        {order.emails.length > 0 ? (
+                                            <div className="space-y-1">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <span className="text-xs text-muted-foreground">รายการเมล์ที่ได้รับ:</span>
+                                                    <Button
+                                                        variant="outline" size="sm" className="h-6 text-[10px]"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const text = order.emails.map(e => e.password ? `${e.email}|${e.password}` : e.email).join('\n');
+                                                            navigator.clipboard.writeText(text);
+                                                            toast({ title: 'คัดลอกทั้งหมดแล้ว!', description: `${order.emails.length} รายการ` });
+                                                        }}
+                                                    >
+                                                        <Copy className="h-2.5 w-2.5 mr-1" /> คัดลอกทั้งหมด
+                                                    </Button>
+                                                </div>
+                                                <div className="max-h-[150px] overflow-y-auto space-y-1">
+                                                    {order.emails.map((e, j) => (
+                                                        <div key={j} className="flex items-center gap-2 p-1.5 rounded bg-background/50 text-xs font-mono">
+                                                            <span className="flex-1 truncate">{e.email}</span>
+                                                            {e.password && (
+                                                                <>
+                                                                    <span className="text-muted-foreground">|</span>
+                                                                    <span className="text-muted-foreground">{e.password}</span>
+                                                                </>
+                                                            )}
+                                                            <Button
+                                                                variant="ghost" size="icon" className="h-5 w-5 shrink-0"
+                                                                onClick={(ev) => {
+                                                                    ev.stopPropagation();
+                                                                    const text = e.password ? `${e.email}|${e.password}` : e.email;
+                                                                    navigator.clipboard.writeText(text);
+                                                                    toast({ title: 'คัดลอกแล้ว!' });
+                                                                }}
+                                                            >
+                                                                <Copy className="h-2.5 w-2.5" />
+                                                            </Button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-muted-foreground">ไม่มีข้อมูลเมล์</p>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+        </div>
+    );
+}
+
 // ===== MAIN PAGE =====
 export default function App() {
     const sms = useHeroSMS();
+    const shopvia = useShopvia();
+    const [mainSection, setMainSection] = useState<'sms' | 'mail'>('sms');
     const [selectedCountry, setSelectedCountry] = useState('52'); // Default: Thailand
     const [selectedService, setSelectedService] = useState('ka'); // Default: Shopee
     const [activeTab, setActiveTab] = useState('buy');
@@ -657,83 +1094,126 @@ export default function App() {
             {/* Header */}
             <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg">
-                    <Smartphone className="h-6 w-6 text-white" />
+                    {mainSection === 'sms' ? (
+                        <Smartphone className="h-6 w-6 text-white" />
+                    ) : (
+                        <Mail className="h-6 w-6 text-white" />
+                    )}
                 </div>
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">Hero-SMS Client</h1>
-                    <p className="text-sm text-muted-foreground">จัดการเบอร์ SMS ชั่วคราว</p>
+                    <h1 className="text-2xl font-bold tracking-tight">
+                        {mainSection === 'sms' ? 'Hero-SMS Client' : 'ร้านค้าเมล'}
+                    </h1>
+                    <p className="text-sm text-muted-foreground">
+                        {mainSection === 'sms' ? 'จัดการเบอร์ SMS ชั่วคราว' : 'Shopvia1s — ซื้อเมลสำเร็จรูป'}
+                    </p>
                 </div>
-                {sms.connected && (
+                {mainSection === 'sms' && sms.connected && (
                     <Button variant="ghost" size="icon" className="ml-auto" onClick={sms.fetchBalance} disabled={sms.loading.balance}>
                         <RefreshCw className={`h-4 w-4 ${sms.loading.balance ? 'animate-spin' : ''}`} />
                     </Button>
                 )}
             </div>
 
-            {/* API Key Bar */}
-            <ApiKeyBar
-                apiKey={sms.apiKey}
-                onConnect={sms.connect}
-                onDisconnect={sms.disconnect}
-                connected={sms.connected}
-                balance={sms.balance}
-                loading={sms.loading.connect}
-            />
+            {/* Main Section Navigation */}
+            <div className="flex gap-2">
+                <Button
+                    variant={mainSection === 'sms' ? 'default' : 'outline'}
+                    onClick={() => setMainSection('sms')}
+                    className="flex-1"
+                >
+                    <Smartphone className="h-4 w-4 mr-2" />
+                    SMS
+                    {sms.activeOrder && <span className="ml-2 h-2 w-2 rounded-full bg-amber-500 animate-pulse" />}
+                </Button>
+                <Button
+                    variant={mainSection === 'mail' ? 'default' : 'outline'}
+                    onClick={() => setMainSection('mail')}
+                    className="flex-1"
+                >
+                    <Mail className="h-4 w-4 mr-2" />
+                    ร้านเมล
+                    {shopvia.connected && shopvia.profile && (
+                        <Badge variant="secondary" className="ml-2 text-[10px] px-1.5">
+                            {formatVndPrice(shopvia.profile.balance).split(' ')[0]} ₫
+                        </Badge>
+                    )}
+                </Button>
+            </div>
 
-            {/* Tabs */}
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-                <TabsList className="grid w-full grid-cols-3">
-                    <TabsTrigger value="pricing" className="flex items-center gap-2">
-                        <DollarSign className="h-4 w-4" />
-                        <span className="hidden sm:inline">ราคา</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="buy" className="flex items-center gap-2">
-                        <Smartphone className="h-4 w-4" />
-                        <span className="hidden sm:inline">ซื้อเบอร์</span>
-                        {sms.activeOrder && (
-                            <span className="ml-1 h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                        )}
-                    </TabsTrigger>
-                    <TabsTrigger value="history" className="flex items-center gap-2">
-                        <Clock className="h-4 w-4" />
-                        <span className="hidden sm:inline">ประวัติ</span>
-                        {sms.history.length > 0 && (
-                            <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1 text-xs">
-                                {sms.history.length}
-                            </Badge>
-                        )}
-                    </TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="pricing">
-                    <PricingTab
+            {/* SMS Section */}
+            {mainSection === 'sms' && (
+                <>
+                    <ApiKeyBar
+                        apiKey={sms.apiKey}
+                        onConnect={sms.connect}
+                        onDisconnect={sms.disconnect}
                         connected={sms.connected}
-                        countries={sms.countries} services={sms.services}
-                        loading={sms.loading} prices={sms.prices}
-                        selectedCountry={selectedCountry} selectedService={selectedService}
-                        onCountryChange={handleCountryChange} onServiceChange={handleServiceChange}
-                        onCheckPrice={handleCheckPrice}
+                        balance={sms.balance}
+                        loading={sms.loading.connect}
                     />
-                </TabsContent>
 
-                <TabsContent value="buy">
-                    <BuyTab
-                        connected={sms.connected}
-                        countries={sms.countries} services={sms.services}
-                        loading={sms.loading} prices={sms.prices}
-                        activeOrder={sms.activeOrder}
-                        selectedCountry={selectedCountry} selectedService={selectedService}
-                        onCountryChange={handleCountryChange} onServiceChange={handleServiceChange}
-                        onCheckPrice={handleCheckPrice} onBuy={handleBuy}
-                        onCancel={handleCancel} onComplete={handleComplete}
-                    />
-                </TabsContent>
+                    <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+                        <TabsList className="grid w-full grid-cols-3">
+                            <TabsTrigger value="pricing" className="flex items-center gap-2">
+                                <DollarSign className="h-4 w-4" />
+                                <span className="hidden sm:inline">ราคา</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="buy" className="flex items-center gap-2">
+                                <Smartphone className="h-4 w-4" />
+                                <span className="hidden sm:inline">ซื้อเบอร์</span>
+                                {sms.activeOrder && (
+                                    <span className="ml-1 h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                                )}
+                            </TabsTrigger>
+                            <TabsTrigger value="history" className="flex items-center gap-2">
+                                <Clock className="h-4 w-4" />
+                                <span className="hidden sm:inline">ประวัติ</span>
+                                {sms.history.length > 0 && (
+                                    <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1 text-xs">
+                                        {sms.history.length}
+                                    </Badge>
+                                )}
+                            </TabsTrigger>
+                        </TabsList>
 
-                <TabsContent value="history">
-                    <HistoryTab history={sms.history} onClear={sms.clearHistory} />
-                </TabsContent>
-            </Tabs>
-            <Toaster />
+                        <TabsContent value="pricing">
+                            <PricingTab
+                                connected={sms.connected}
+                                countries={sms.countries} services={sms.services}
+                                loading={sms.loading} prices={sms.prices}
+                                selectedCountry={selectedCountry} selectedService={selectedService}
+                                onCountryChange={handleCountryChange} onServiceChange={handleServiceChange}
+                                onCheckPrice={handleCheckPrice}
+                            />
+                        </TabsContent>
+
+                        <TabsContent value="buy">
+                            <BuyTab
+                                connected={sms.connected}
+                                countries={sms.countries} services={sms.services}
+                                loading={sms.loading} prices={sms.prices}
+                                activeOrder={sms.activeOrder}
+                                selectedCountry={selectedCountry} selectedService={selectedService}
+                                onCountryChange={handleCountryChange} onServiceChange={handleServiceChange}
+                                onCheckPrice={handleCheckPrice} onBuy={handleBuy}
+                                onCancel={handleCancel} onComplete={handleComplete}
+                            />
+                        </TabsContent>
+
+                        <TabsContent value="history">
+                            <HistoryTab history={sms.history} onClear={sms.clearHistory} />
+                        </TabsContent>
+                    </Tabs>
+                </>
+            )}
+
+            {/* Mail Section */}
+            {mainSection === 'mail' && (
+                <ShopviaSection shopvia={shopvia} />
+            )}
+
+
         </div>
     );
 }

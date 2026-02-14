@@ -4,6 +4,11 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SHOPVIA_API_KEY = process.env.SHOPVIA_API_KEY || '';
+const SHOPVIA_BASE = 'https://shopvia1s.com/api';
+
+// JSON body parser
+app.use(express.json());
 
 // CORS middleware — allow requests from GitHub Pages
 app.use((req, res, next) => {
@@ -52,6 +57,75 @@ app.use('/api/hero-sms', (req, res) => {
         console.error('[proxy] Error:', err.message);
         res.status(502).json({ error: err.message });
     });
+});
+
+// ===== Shopvia1s API Proxy =====
+
+// Products list
+app.get('/api/shopvia/products', async (req, res) => {
+    try {
+        const key = req.headers['x-api-key'] || SHOPVIA_API_KEY;
+        const r = await fetch(`${SHOPVIA_BASE}/products.php?api_key=${encodeURIComponent(key)}`);
+        const data = await r.json();
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Profile / balance
+app.get('/api/shopvia/profile', async (req, res) => {
+    try {
+        const key = req.headers['x-api-key'] || SHOPVIA_API_KEY;
+        const r = await fetch(`${SHOPVIA_BASE}/profile.php?api_key=${encodeURIComponent(key)}`);
+        const data = await r.json();
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Buy product
+app.post('/api/shopvia/buy', async (req, res) => {
+    try {
+        const key = req.headers['x-api-key'] || SHOPVIA_API_KEY;
+        const { productId, amount } = req.body;
+
+        // API requires lowercase param names: id, amount (NOT ID, Amount)
+        const formData = new URLSearchParams();
+        formData.append('action', 'buyProduct');
+        formData.append('id', String(productId));
+        formData.append('amount', String(amount || 1));
+        formData.append('coupon', '');
+        formData.append('api_key', key);
+
+        const r = await fetch(`${SHOPVIA_BASE}/buy_product`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formData.toString(),
+        });
+        const data = await r.json();
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Order history
+app.get('/api/shopvia/orders', async (req, res) => {
+    try {
+        const key = req.headers['x-api-key'] || SHOPVIA_API_KEY;
+        const r = await fetch(`${SHOPVIA_BASE}/order.php?api_key=${encodeURIComponent(key)}`);
+        const data = await r.json();
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// API key status check
+app.get('/api/shopvia/status', (req, res) => {
+    res.json({ hasApiKey: !!SHOPVIA_API_KEY });
 });
 
 // SPA fallback
